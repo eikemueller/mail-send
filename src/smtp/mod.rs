@@ -16,7 +16,6 @@ pub mod client;
 pub mod ehlo;
 pub mod envelope;
 pub mod message;
-pub mod tls;
 
 impl From<auth::Error> for crate::Error {
     fn from(err: auth::Error) -> Self {

@@ -8,47 +8,29 @@
  * except according to those terms.
  */
 
+use log::info;
 use smtp_proto::{EhloResponse, EXT_START_TLS};
 use std::hash::Hash;
 use std::time::Duration;
-use tokio::{
-    io::{AsyncRead, AsyncWrite},
-    net::TcpStream,
-};
-use tokio_rustls::client::TlsStream;
+use tokio::io::{AsyncRead, AsyncWrite};
+use worker::{SecureTransport, Socket};
 
 use crate::{Credentials, SmtpClient, SmtpClientBuilder};
 
-use super::{tls::build_tls_connector, AssertReply};
+use super::AssertReply;
 
 impl<T: AsRef<str> + PartialEq + Eq + Hash> SmtpClientBuilder<T> {
-    pub fn new(hostname: T, port: u16) -> Self {
+    pub fn new(hostname: T, port: u16, secure_transport: SecureTransport) -> Self {
         SmtpClientBuilder {
-            addr: format!("{}:{}", hostname.as_ref(), port),
             timeout: Duration::from_secs(60 * 60),
-            tls_connector: build_tls_connector(false),
-            tls_hostname: hostname,
-            tls_implicit: true,
+            hostname,
+            port,
+            secure_transport,
             is_lmtp: false,
-            local_host: gethostname::gethostname()
-                .to_str()
-                .unwrap_or("[127.0.0.1]")
-                .to_string(),
+            local_host: String::from("[127.0.0.1]"),
             credentials: None,
             say_ehlo: true,
         }
-    }
-
-    /// Allow invalid TLS certificates
-    pub fn allow_invalid_certs(mut self) -> Self {
-        self.tls_connector = build_tls_connector(true);
-        self
-    }
-
-    /// Start connection in TLS or upgrade with STARTTLS
-    pub fn implicit_tls(mut self, tls_implicit: bool) -> Self {
-        self.tls_implicit = tls_implicit;
-        self
     }
 
     /// Use LMTP instead of SMTP
@@ -81,68 +63,35 @@ impl<T: AsRef<str> + PartialEq + Eq + Hash> SmtpClientBuilder<T> {
         self
     }
 
-    /// Connect over TLS
-    pub async fn connect(&self) -> crate::Result<SmtpClient<TlsStream<TcpStream>>> {
-        tokio::time::timeout(self.timeout, async {
-            let mut client = SmtpClient {
-                stream: TcpStream::connect(&self.addr).await?,
-                timeout: self.timeout,
-            };
-
-            let mut client = if self.tls_implicit {
-                let mut client = client
-                    .into_tls(&self.tls_connector, self.tls_hostname.as_ref())
-                    .await?;
-                // Read greeting
-                client.read().await?.assert_positive_completion()?;
-                client
-            } else {
-                // Read greeting
-                client.read().await?.assert_positive_completion()?;
-
-                // Send EHLO
-                let response = if !self.is_lmtp {
-                    client.ehlo(&self.local_host).await?
-                } else {
-                    client.lhlo(&self.local_host).await?
-                };
-                if response.has_capability(EXT_START_TLS) {
-                    client
-                        .start_tls(&self.tls_connector, self.tls_hostname.as_ref())
-                        .await?
-                } else {
-                    return Err(crate::Error::MissingStartTls);
-                }
-            };
-
-            if self.say_ehlo {
-                // Obtain capabilities
-                let capabilities = client.capabilities(&self.local_host, self.is_lmtp).await?;
-                // Authenticate
-                if let Some(credentials) = &self.credentials {
-                    client.authenticate(&credentials, &capabilities).await?;
-                }
-            }
-
-            Ok(client)
-        })
-        .await
-        .map_err(|_| crate::Error::Timeout)?
-    }
-
-    /// Connect over clear text (should not be used)
-    pub async fn connect_plain(&self) -> crate::Result<SmtpClient<TcpStream>> {
-        let mut client = SmtpClient {
-            stream: tokio::time::timeout(self.timeout, async {
-                TcpStream::connect(&self.addr).await
-            })
-            .await
-            .map_err(|_| crate::Error::Timeout)??,
-            timeout: self.timeout,
-        };
-
-        // Read greeting
+    pub async fn connect(&self) -> crate::Result<SmtpClient<Socket>> {
+        info!("connecting to {}:{}", self.hostname.as_ref(), self.port);
+        let mut client = SmtpClient::connect(
+            self.hostname.as_ref(),
+            self.port,
+            self.secure_transport.clone(),
+            self.timeout,
+        )
+        .await?;
+        info!("await completion");
         client.read().await?.assert_positive_completion()?;
+        info!("awaited completion");
+
+        if self.secure_transport == SecureTransport::StartTls {
+            info!("starttls");
+            // Send EHLO
+            let response = if !self.is_lmtp {
+                client.ehlo(&self.local_host).await?
+            } else {
+                client.lhlo(&self.local_host).await?
+            };
+            if response.has_capability(EXT_START_TLS) {
+                client = client.start_tls().await?;
+            } else {
+                return Err(crate::Error::MissingStartTls);
+            }
+        }
+
+        info!("connected");
 
         if self.say_ehlo {
             // Obtain capabilities
@@ -168,5 +117,31 @@ impl<T: AsyncRead + AsyncWrite + Unpin> SmtpClient<T> {
         } else {
             self.lhlo(local_host).await
         }
+    }
+}
+
+impl SmtpClient<Socket> {
+    pub async fn connect(
+        hostname: &str,
+        port: u16,
+        secure_transport: SecureTransport,
+        timeout: Duration,
+    ) -> crate::Result<Self> {
+        let socket = Socket::builder()
+            .secure_transport(secure_transport)
+            .connect(hostname, port)?;
+        Self::new(socket, timeout).await
+    }
+
+    pub async fn start_tls(self) -> crate::Result<Self> {
+        Self::new(self.stream.start_tls(), self.timeout).await
+    }
+
+    async fn new(socket: Socket, timeout: Duration) -> crate::Result<Self> {
+        socket.opened().await?;
+        Ok(Self {
+            stream: socket,
+            timeout,
+        })
     }
 }
