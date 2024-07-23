@@ -19,28 +19,20 @@ use crate::SmtpClient;
 impl<T: AsyncRead + AsyncWrite + Unpin> SmtpClient<T> {
     /// Sends a EHLO command to the server.
     pub async fn ehlo(&mut self, hostname: &str) -> crate::Result<EhloResponse<String>> {
-        tokio::time::timeout(self.timeout, async {
-            self.stream
-                .write_all(format!("EHLO {hostname}\r\n").as_bytes())
-                .await?;
-            self.stream.flush().await?;
-            self.read_ehlo().await
-        })
-        .await
-        .map_err(|_| crate::Error::Timeout)?
+        self.stream
+            .write_all(format!("EHLO {hostname}\r\n").as_bytes())
+            .await?;
+        self.stream.flush().await?;
+        self.read_ehlo().await
     }
 
     /// Sends a LHLO command to the server.
     pub async fn lhlo(&mut self, hostname: &str) -> crate::Result<EhloResponse<String>> {
-        tokio::time::timeout(self.timeout, async {
-            self.stream
-                .write_all(format!("LHLO {hostname}\r\n").as_bytes())
-                .await?;
-            self.stream.flush().await?;
-            self.read_ehlo().await
-        })
-        .await
-        .map_err(|_| crate::Error::Timeout)?
+        self.stream
+            .write_all(format!("LHLO {hostname}\r\n").as_bytes())
+            .await?;
+        self.stream.flush().await?;
+        self.read_ehlo().await
     }
 
     pub async fn read_ehlo(&mut self) -> crate::Result<EhloResponse<String>> {

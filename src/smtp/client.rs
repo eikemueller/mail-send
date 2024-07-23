@@ -76,13 +76,9 @@ impl<T: AsyncRead + AsyncWrite + Unpin> SmtpClient<T> {
 
     /// Sends a command to the SMTP server and waits for a reply.
     pub async fn cmd(&mut self, cmd: impl AsRef<[u8]>) -> crate::Result<Response<String>> {
-        tokio::time::timeout(self.timeout, async {
-            self.stream.write_all(cmd.as_ref()).await?;
-            self.stream.flush().await?;
-            self.read().await
-        })
-        .await
-        .map_err(|_| crate::Error::Timeout)?
+        self.stream.write_all(cmd.as_ref()).await?;
+        self.stream.flush().await?;
+        self.read().await
     }
 
     /// Pipelines multiple command to the SMTP server and waits for a reply.
@@ -90,17 +86,13 @@ impl<T: AsyncRead + AsyncWrite + Unpin> SmtpClient<T> {
         &mut self,
         cmds: impl IntoIterator<Item = impl AsRef<[u8]>>,
     ) -> crate::Result<Vec<Response<String>>> {
-        tokio::time::timeout(self.timeout, async {
-            let mut num_replies = 0;
-            for cmd in cmds {
-                self.stream.write_all(cmd.as_ref()).await?;
-                num_replies += 1;
-            }
-            self.stream.flush().await?;
-            self.read_many(num_replies).await
-        })
-        .await
-        .map_err(|_| crate::Error::Timeout)?
+        let mut num_replies = 0;
+        for cmd in cmds {
+            self.stream.write_all(cmd.as_ref()).await?;
+            num_replies += 1;
+        }
+        self.stream.flush().await?;
+        self.read_many(num_replies).await
     }
 }
 
