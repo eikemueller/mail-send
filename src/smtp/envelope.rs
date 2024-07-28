@@ -10,6 +10,11 @@
 
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 
+#[cfg(not(target_family="wasm"))]
+use tokio::time::timeout;
+#[cfg(target_family="wasm")]
+use wasmtimer::tokio::timeout;
+
 use crate::SmtpClient;
 
 use super::{message::Parameters, AssertReply};
@@ -32,20 +37,30 @@ impl<T: AsyncRead + AsyncWrite + Unpin> SmtpClient<T> {
     /// Sends a DATA command to the server.
     pub async fn data(&mut self, message: impl AsRef<[u8]>) -> crate::Result<()> {
         self.cmd(b"DATA\r\n").await?.assert_code(354)?;
-        self.write_message(message.as_ref()).await?;
-        self.read().await?
+        timeout(self.timeout, async {
+            // Write message
+            self.write_message(message.as_ref()).await?;
+            self.read().await
+        })
+        .await
+        .map_err(|_| crate::Error::Timeout)??
         .assert_positive_completion()
     }
 
     /// Sends a BDAT command to the server.
     pub async fn bdat(&mut self, message: impl AsRef<[u8]>) -> crate::Result<()> {
         let message = message.as_ref();
-        self.stream
-            .write_all(format!("BDAT {} LAST\r\n", message.len()).as_bytes())
-            .await?;
-        self.stream.write_all(message).await?;
-        self.stream.flush().await?;
-        self.read().await?.assert_positive_completion()
+        timeout(self.timeout, async {
+            self.stream
+                .write_all(format!("BDAT {} LAST\r\n", message.len()).as_bytes())
+                .await?;
+            self.stream.write_all(message).await?;
+            self.stream.flush().await?;
+            self.read().await
+        })
+        .await
+        .map_err(|_| crate::Error::Timeout)??
+        .assert_positive_completion()
     }
 
     /// Sends a RSET command to the server.

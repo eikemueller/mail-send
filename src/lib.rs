@@ -127,14 +127,24 @@
 pub mod smtp;
 use std::{fmt::Display, hash::Hash, time::Duration};
 use tokio::io::{AsyncRead, AsyncWrite};
-use worker::SecureTransport;
+
+#[cfg(feature = "client-builder")]
+use tokio_rustls::TlsConnector;
+
+#[cfg(feature = "builder")]
+pub use mail_builder;
+
+#[cfg(feature = "dkim")]
+pub use mail_auth;
 
 #[derive(Debug)]
 pub enum Error {
     /// I/O error
     Io(std::io::Error),
 
-    TlsError(worker::Error),
+    /// TLS error
+    #[cfg(feature = "client-builder")]
+    Tls(Box<rustls::Error>),
 
     /// Base64 decode error
     Base64(base64::DecodeError),
@@ -186,12 +196,13 @@ impl std::error::Error for Error {
 pub type Result<T> = std::result::Result<T, Error>;
 
 /// SMTP client builder
+#[cfg(feature = "client-builder")]
 #[derive(Clone)]
 pub struct SmtpClientBuilder<T: AsRef<str> + PartialEq + Eq + Hash> {
     pub timeout: Duration,
-    pub hostname: T,
-    pub port: u16,
-    pub secure_transport: SecureTransport,
+    pub tls_connector: TlsConnector,
+    pub tls_hostname: T,
+    pub tls_implicit: bool,
     pub credentials: Option<Credentials<T>>,
     pub is_lmtp: bool,
     pub say_ehlo: bool,
@@ -224,6 +235,8 @@ impl Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Error::Io(e) => write!(f, "I/O error: {e}"),
+            #[cfg(feature = "client-builder")]
+            Error::Tls(e) => write!(f, "TLS error: {e}"),
             Error::Base64(e) => write!(f, "Base64 decode error: {e}"),
             Error::Auth(e) => write!(f, "SMTP authentication error: {e}"),
             Error::UnparseableReply => write!(f, "Unparseable SMTP reply"),
@@ -239,7 +252,6 @@ impl Display for Error {
             ),
             Error::Timeout => write!(f, "Connection timeout"),
             Error::MissingStartTls => write!(f, "STARTTLS extension unavailable"),
-            Error::TlsError(e) => write!(f, "Tls error: {e}"),
         }
     }
 }
@@ -253,11 +265,5 @@ impl From<std::io::Error> for Error {
 impl From<base64::DecodeError> for Error {
     fn from(err: base64::DecodeError) -> Self {
         Error::Base64(err)
-    }
-}
-
-impl From<worker::Error> for Error {
-    fn from(err: worker::Error) -> Self {
-        Error::TlsError(err)
     }
 }

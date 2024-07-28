@@ -350,7 +350,8 @@ mod test {
 
     use crate::smtp::auth::Credentials;
 
-    #[test]
+    #[cfg_attr(not(target_family = "wasm"), test)]
+    #[cfg_attr(target_family = "wasm", wasm_bindgen_test::wasm_bindgen_test)]
     fn auth_encode() {
         // Digest-MD5
         #[cfg(feature = "digest-md5")]

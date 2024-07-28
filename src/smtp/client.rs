@@ -8,8 +8,19 @@
  * except according to those terms.
  */
 
+#[cfg(feature = "client-builder")]
+use std::net::{IpAddr, SocketAddr};
+use std::time::Duration;
+
 use smtp_proto::{response::parser::ResponseReceiver, Response};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+#[cfg(feature = "client-builder")]
+use tokio::net::{TcpSocket, TcpStream};
+
+#[cfg(not(target_family="wasm"))]
+use tokio::time::timeout;
+#[cfg(target_family="wasm")]
+use wasmtimer::tokio::timeout;
 
 use crate::SmtpClient;
 
@@ -76,9 +87,13 @@ impl<T: AsyncRead + AsyncWrite + Unpin> SmtpClient<T> {
 
     /// Sends a command to the SMTP server and waits for a reply.
     pub async fn cmd(&mut self, cmd: impl AsRef<[u8]>) -> crate::Result<Response<String>> {
-        self.stream.write_all(cmd.as_ref()).await?;
-        self.stream.flush().await?;
-        self.read().await
+        timeout(self.timeout, async {
+            self.stream.write_all(cmd.as_ref()).await?;
+            self.stream.flush().await?;
+            self.read().await
+        })
+        .await
+        .map_err(|_| crate::Error::Timeout)?
     }
 
     /// Pipelines multiple command to the SMTP server and waits for a reply.
@@ -86,13 +101,55 @@ impl<T: AsyncRead + AsyncWrite + Unpin> SmtpClient<T> {
         &mut self,
         cmds: impl IntoIterator<Item = impl AsRef<[u8]>>,
     ) -> crate::Result<Vec<Response<String>>> {
-        let mut num_replies = 0;
-        for cmd in cmds {
-            self.stream.write_all(cmd.as_ref()).await?;
-            num_replies += 1;
-        }
-        self.stream.flush().await?;
-        self.read_many(num_replies).await
+        timeout(self.timeout, async {
+            let mut num_replies = 0;
+            for cmd in cmds {
+                self.stream.write_all(cmd.as_ref()).await?;
+                num_replies += 1;
+            }
+            self.stream.flush().await?;
+            self.read_many(num_replies).await
+        })
+        .await
+        .map_err(|_| crate::Error::Timeout)?
+    }
+}
+
+#[cfg(feature = "client-builder")]
+impl SmtpClient<TcpStream> {
+    /// Connects to a remote host address
+    pub async fn connect(remote_addr: SocketAddr, timeout: Duration) -> crate::Result<Self> {
+        tokio::time::timeout(timeout, async {
+            Ok(SmtpClient {
+                stream: TcpStream::connect(remote_addr).await?,
+                timeout,
+            })
+        })
+        .await
+        .map_err(|_| crate::Error::Timeout)?
+    }
+
+    /// Connects to a remote host address using the provided local IP
+    pub async fn connect_using(
+        local_ip: IpAddr,
+        remote_addr: SocketAddr,
+        timeout: Duration,
+    ) -> crate::Result<Self> {
+        tokio::time::timeout(timeout, async {
+            let socket = if local_ip.is_ipv4() {
+                TcpSocket::new_v4()?
+            } else {
+                TcpSocket::new_v6()?
+            };
+            socket.bind(SocketAddr::new(local_ip, 0))?;
+
+            Ok(SmtpClient {
+                stream: socket.connect(remote_addr).await?,
+                timeout,
+            })
+        })
+        .await
+        .map_err(|_| crate::Error::Timeout)?
     }
 }
 
@@ -102,18 +159,23 @@ mod test {
 
     use tokio::io::{AsyncRead, AsyncWrite};
 
-    use crate::{SmtpClient, SmtpClientBuilder};
+    use crate::SmtpClient;
+    
+    #[cfg(feature = "client-builder")]
+    use crate::SmtpClientBuilder;
 
+    #[cfg(feature = "client-builder")]
     #[tokio::test]
     async fn smtp_basic() {
         // StartTLS test
         env_logger::init();
-        let client = SmtpClientBuilder::new("mail.smtp2go.com", 2525, worker::SecureTransport::StartTls)
+        let client = SmtpClientBuilder::new("mail.smtp2go.com", 2525)
+            .implicit_tls(false)
             .connect()
             .await
             .unwrap();
         client.quit().await.unwrap();
-        let client = SmtpClientBuilder::new("mail.smtp2go.com", 2525, worker::SecureTransport::StartTls)
+        let client = SmtpClientBuilder::new("mail.smtp2go.com", 2525)
             .allow_invalid_certs()
             .connect()
             .await
@@ -121,14 +183,14 @@ mod test {
         client.quit().await.unwrap();
 
         // Say hello to Google over TLS and quit
-        let client = SmtpClientBuilder::new("smtp.gmail.com", 465, worker::SecureTransport::On)
+        let client = SmtpClientBuilder::new("smtp.gmail.com", 465)
             .connect()
             .await
             .unwrap();
         client.quit().await.unwrap();
 
         // Say hello to Google over TLS and quit
-        let client = SmtpClientBuilder::new("smtp.gmail.com", 465, worker::SecureTransport::On)
+        let client = SmtpClientBuilder::new("smtp.gmail.com", 465)
             .allow_invalid_certs()
             .connect()
             .await
@@ -176,7 +238,8 @@ mod test {
         }
     }
 
-    #[tokio::test]
+    #[cfg_attr(not(target_family = "wasm"), tokio::test)]
+    #[cfg_attr(target_family = "wasm", wasm_bindgen_test::wasm_bindgen_test)]
     async fn transparency_procedure() {
         const SMUGGLER: &str = r#"From: Joe SixPack <john@foobar.net>
 To: Suzie Q <suzie@foobar.org>

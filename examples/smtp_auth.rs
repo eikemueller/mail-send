@@ -8,7 +8,6 @@
  * option. This file may not be copied, modified, or distributed
  * except according to those terms.
  */
-
 use mail_builder::MessageBuilder;
 use mail_send::SmtpClientBuilder;
 

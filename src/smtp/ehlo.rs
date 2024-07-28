@@ -14,25 +14,38 @@ use smtp_proto::{
 };
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
+#[cfg(not(target_family="wasm"))]
+use tokio::time::timeout;
+#[cfg(target_family="wasm")]
+use wasmtimer::tokio::timeout;
+
 use crate::SmtpClient;
 
 impl<T: AsyncRead + AsyncWrite + Unpin> SmtpClient<T> {
     /// Sends a EHLO command to the server.
     pub async fn ehlo(&mut self, hostname: &str) -> crate::Result<EhloResponse<String>> {
-        self.stream
-            .write_all(format!("EHLO {hostname}\r\n").as_bytes())
-            .await?;
-        self.stream.flush().await?;
-        self.read_ehlo().await
+        timeout(self.timeout, async {
+            self.stream
+                .write_all(format!("EHLO {hostname}\r\n").as_bytes())
+                .await?;
+            self.stream.flush().await?;
+            self.read_ehlo().await
+        })
+        .await
+        .map_err(|_| crate::Error::Timeout)?
     }
 
     /// Sends a LHLO command to the server.
     pub async fn lhlo(&mut self, hostname: &str) -> crate::Result<EhloResponse<String>> {
-        self.stream
-            .write_all(format!("LHLO {hostname}\r\n").as_bytes())
-            .await?;
-        self.stream.flush().await?;
-        self.read_ehlo().await
+        timeout(self.timeout, async {
+            self.stream
+                .write_all(format!("LHLO {hostname}\r\n").as_bytes())
+                .await?;
+            self.stream.flush().await?;
+            self.read_ehlo().await
+        })
+        .await
+        .map_err(|_| crate::Error::Timeout)?
     }
 
     pub async fn read_ehlo(&mut self) -> crate::Result<EhloResponse<String>> {

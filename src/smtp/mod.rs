@@ -11,11 +11,14 @@
 use smtp_proto::{Response, Severity};
 
 pub mod auth;
+#[cfg(feature = "client-builder")]
 pub mod builder;
 pub mod client;
 pub mod ehlo;
 pub mod envelope;
 pub mod message;
+#[cfg(feature = "client-builder")]
+pub mod tls;
 
 impl From<auth::Error> for crate::Error {
     fn from(err: auth::Error) -> Self {
