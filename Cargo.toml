@@ -17,7 +17,7 @@ doctest = false
 [dependencies]
 smtp-proto = { version = "0.1" }
 mail-auth = { version = "0.4", optional = true }
-mail-builder = { version = "0.3", optional = true }
+mail-builder = { version = "0.3", default-features = false, optional = true }
 mail-parser = { version = "0.9", optional = true }
 base64 = "0.22"
 rand = { version = "0.8.5", optional = true }
@@ -53,6 +53,15 @@ tokio = { version = "1.16", features = [
 wasm-bindgen-test = "0.3"
 
 [features]
+default = [
+    "client-builder",
+    "digest-md5",
+    "cram-md5",
+    "builder",
+    "dkim",
+    "ring",
+    "tls12",
+]
 client-builder = [
     "tokio/net",
     "tokio/time",
@@ -73,21 +82,6 @@ fips = ["rustls/fips", "tokio-rustls/fips"]
 logging = ["rustls/logging", "tokio-rustls/logging"]
 ring = ["rustls/ring", "tokio-rustls/ring"]
 tls12 = ["rustls/tls12", "tokio-rustls/tls12"]
-
-
-[target.'cfg(not(target_family = "wasm"))'.features]
-default = [
-    "client-builder",
-    "digest-md5",
-    "cram-md5",
-    "builder",
-    "dkim",
-    "ring",
-    "tls12",
-]
-
-[target.'cfg(target_family = "wasm")'.features]
-default = []
 
 [[example]]
 name = "smtp_auth"

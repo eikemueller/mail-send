@@ -204,6 +204,7 @@ pub struct SmtpClientBuilder<T: AsRef<str> + PartialEq + Eq + Hash> {
     pub tls_hostname: T,
     pub tls_implicit: bool,
     pub credentials: Option<Credentials<T>>,
+    pub addr: String,
     pub is_lmtp: bool,
     pub say_ehlo: bool,
     pub local_host: String,
